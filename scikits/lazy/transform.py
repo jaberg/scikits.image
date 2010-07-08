@@ -29,6 +29,16 @@ def register_transform(position, tags=[]):
         return handle
     return deco
 
+# DENOTE SOME KEY POINTS IN FULL OPTIMIZATION PIPELINE
+
+transform_db['merge_0'] = TransformHandle('merge_0', 0, [], lambda x:x)
+
+transform_db['begin_specialize'] = TransformHandle('begin_specialize', 10, [], lambda x:x)
+transform_db['end_specialize'] = TransformHandle('end_specialize', 15, [], lambda x:x)
+
+transform_db['begin_backend'] = TransformHandle('begin_backend', 20, [], lambda x:x)
+transform_db['end_backend'] = TransformHandle('end_backend', 25, [], lambda x:x)
+
 class TransformPolicy(object):
     @classmethod
     def new(cls, filter=lambda handle:True):
@@ -65,4 +75,5 @@ def infer_types(closure, **kwargs):
     """
     changed = set()
     for expr in closure.expr_iter():
-        expr.impl.infer_type(expr, changed)
+        expr_changed = expr.impl.infer_type(expr)
+        #TODO: propagate changes only

@@ -14,8 +14,10 @@ In this case, if any argument to some_fn is a Symbol, then the output will also 
 the function will not be run right away.  The input and output Symbols can also be used to
 define specialized functions.
 
+:licence: modified BSD
 """
 import copy
+from collections import deque
 
 import transform
 
@@ -57,7 +59,7 @@ class Type(object):
             return (self.value is value)
         return True
 
-    def make_conformant(self, value):
+    def coerce(self, value):
         """
         Return an object that is equal to value, but conformant to this metadata.
 
@@ -72,6 +74,10 @@ class Type(object):
             raise TypeError(value)
         return value
 
+    def make_constant(self, value):
+        self.value = self.coerce(value)
+        self.constant = True
+
     def eq(self, v0, v1, approx=False):
         """Return True iff v0 and v1 are [`approx`] equal in the context of this Type. 
 
@@ -85,19 +91,25 @@ class Type(object):
         if self.constant:
             return self.value
         return UndefinedValue
+    def clone(self):
+        if self.constant:
+            return self
+        return copy.deepcopy(self)
 
 class Symbol(object):
     """A value node in an expression graph.
     """
     Type=Type
     @classmethod
-    def new(cls, closure, expr=None, type=None,value=UndefinedValue,name=None):
+    def new(cls, closure=None, expr=None, type=None,value=UndefinedValue,name=None):
         """Return a Symbol instance within the given closure
         """
+        if closure is None:
+            closure = default_closure
         if type is None:
             type = cls.Type()
         if value is not type.get_clear_value():
-            value = type.make_conformant(value)
+            value = type.coerce(value)
         rval = cls(None, expr,type,value,name)
         return closure.add_symbol(rval)
 
@@ -124,7 +136,7 @@ class Closure(object):
 
 
     """
-    def __init__(self ):
+    def __init__(self):
         self.elements = set() # the Symbols in this Closure
         self.clone_dict = {}  # maps foreign Symbols to local ones.
 
@@ -134,6 +146,7 @@ class Closure(object):
             return self.clone_dict[orig_symbol]
         except KeyError:
             pass
+        #print "CLONE", orig_symbol, orig_symbol.expr
 
         if getattr(orig_symbol, 'expr', None) and recurse:
             # recursive clone of inputs
@@ -145,33 +158,48 @@ class Closure(object):
                 rval = orig_symbol.expr.impl(*input_copies)
                 for s,r in zip(orig_symbol.expr.outputs, rval):
                     self.clone_dict[s] = r
+            #print "CLONE returning", self.clone_dict[orig_symbol]
             return self.clone_dict[orig_symbol]
         else:
             # single clone of orig_symbol
-            return self.add_symbol(
+            rval = self.add_symbol(
                     orig_symbol.__class__.new(
                         closure=self,
                         expr=None,
-                        type=copy.deepcopy(orig_symbol.type),
+                        type=orig_symbol.type.clone(),
                         value=orig_symbol.value,
                         name=orig_symbol.name))
+            self.clone_dict[orig_symbol] = rval
+            #print "CLONE Returning", rval
+            return rval
 
     def add_symbol(self, symbol):
         """Add a Symbol to this closure
         """
-        if not isinstance(symbol, Symbol):
-            raise TypeError(symbol)
         if symbol.closure and symbol.closure is not self:
             raise ValueError('symbol already has closure', symbol.closure)
         self.elements.add(symbol)
         symbol.closure = self
         return symbol
+
+    def add_expr(self, expr):
+        """Add an expression to this closure"""
+        for o in expr.outputs:
+            o.expr = expr
+        expr.closure = self
+        return expr
+
     def remove_symbol(self, symbol):
         for s_foreign, s_local in self.clone_dict.items():
             if s_local is symbol:
                 del self.clone_dict[s_foreign]
         self.elements.remove(symbol)
         symbol.closure = None
+
+    def remove_expr(self, expr):
+        for o in expr.outputs:
+            o.expr = None
+        o.closure = None
 
 class IncrementalClosure(Closure):
     """
@@ -199,12 +227,12 @@ class IncrementalClosure(Closure):
             results = expr.impl.fn(*args)
             if expr.n_outputs>1:
                 for s,r in zip(expr.outputs, results):
-                    s.value = s.type.make_conformant(r)
+                    s.value = s.type.coerce(r)
                     if not (s.value is r):
                         print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
             else:
                 # one output means `symbol` must be that one output
-                symbol.value = symbol.type.make_conformant(results)
+                symbol.value = symbol.type.coerce(results)
                 if not (symbol.value is results):
                     print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
         return symbol.value
@@ -229,7 +257,7 @@ class SpecializedClosure(Closure):
      
     """
     def __init__(self, transform_policy):
-        super(CallableClosure, self).__init__()
+        super(SpecializedClosure, self).__init__()
         self._iterating = False
         self._modified_since_iterating = False
         self.transform_policy = transform_policy
@@ -244,7 +272,20 @@ class SpecializedClosure(Closure):
         self.on_replace_impl_post = set()
     def add_symbol(self, symbol):
         rval = super(SpecializedClosure,self).add_symbol(symbol)
-        rval.clients = []
+        if not hasattr(rval, 'clients'):
+            rval.clients = set()
+        return rval
+
+    def add_expr(self, expr):
+        """Add an expression to this closure"""
+        rval = super(SpecializedClosure, self).add_expr(expr)
+        for i, s_i in enumerate(expr.inputs):
+            s_i.clients.add((expr, i))
+        return rval
+    def remove_expr(self, expr):
+        rval = super(SpecializedClosure, self).remove_expr(expr)
+        for i, s_i in enumerate(expr.inputs):
+            s_i.clients.remove((expr, i))
         return rval
 
     def remove_symbol(self, symbol):
@@ -371,11 +412,12 @@ class SpecializedClosure(Closure):
         Raises an exception if you try to continue iterating after
         modifying the expression graph.
         """
-        things = [e for e in io_toposort(self.inputs, self.outputs) if filter_fn(e)]
+        things = [e for e in io_toposort(self.inputs, self.outputs, {}) if filter_fn(e)]
         self._iterating = True
         for e in things:
             if self._modified_since_iterating:
                 raise Exception('Modified since iterating')
+            assert e.closure == self
             yield e
         self._iterating = False
         self._modified_since_iterating = False
@@ -386,22 +428,75 @@ class SpecializedClosure(Closure):
         return self.nodes_iter(lambda o: hasattr(o, 'type'))
     def expr_iter(self):
         return self.nodes_iter(lambda o: hasattr(o, 'impl'))
+    def expr_iter_with_Impl(self, ImplClass):
+        return self.nodes_iter(lambda o: isinstance(getattr(o, 'impl', None), ImplClass))
 
     def __call__(self, *args):
         if len(args) != len(self.inputs):
             raise TypeError('Wrong number of inputs')
+        computed = {}
+        #print 'ALL', list(self.nodes_iter(lambda x:True))
+        #print "ELEMENTS", list(self.elements)
+        #print "CONSTANTS", list(self.constant_iter())
+        #print "INPUTS", self.inputs
+        #print "INPUTS0 CLIENTS", self.inputs[0].clients
+        for c in self.constant_iter():
+            computed[c] = c.value
         for i, a in zip(self.inputs, args):
-            self.set_value(i,a)
+            computed[i] = a
+        print computed
+
+        for expr in self.expr_iter():
+            args = [computed[i] for i in expr.inputs]
+            results = expr.impl.fn(*args)
+            if expr.n_outputs>1:
+                assert len(results) == len(expr.outputs)
+                for s,r in zip(expr.outputs, results):
+                    computed[s] = s.type.coerce(r) # coerce returns r (quickly) if r is conformant
+                    if not (computed[s] is r):
+                        print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
+            else:
+                # one output means `symbol` must be that one output
+                computed[expr.outputs[0]] = expr.outputs[0].type.coerce(results)
+                if not (computed[expr.outputs[0]] is results):
+                    print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
+
         if self.unpack:
-            return self.compute_value(self.outputs[0])
+            return computed[self.outputs[0]]
         else:
-            return self.compute_values(self.outputs)
+            return [computed[o] for o in self.outputs]
 
 # The default closure is a database of values to use for symbols
 # that are not given as function arguments.
 # The default closure is used by the compute() function to 
 # support lazy evaluation.
 default_closure = IncrementalClosure()
+
+class Expr(object):
+    """An implementation node in a expression graph. 
+    
+    This class is a glorified tuple, it has no interesting methods.
+    """
+    @classmethod
+    def new(cls, impl, inputs, outputs):
+        rval = cls(None, impl, inputs, outputs)
+        #assert all Inputs and outputs are symbols
+        bad_inputs = [i for i in inputs if not isinstance(i, Symbol)]
+        bad_outputs =[i for i in outputs if not isinstance(i, Symbol)] 
+        assert not bad_inputs, bad_inputs
+        assert not bad_outputs, bad_outputs
+        inputs[0].closure.add_expr(rval)
+        return rval
+
+    def __init__(self, closure, impl, inputs, outputs):
+        self.closure = closure
+        self.impl = impl
+        self.inputs = list(inputs)
+        self.outputs = list(outputs)
+    def __str__(self):
+        return 'Expr{%s}'%str(self.impl)
+    n_inputs = property(lambda self: len(self.inputs))
+    n_outputs = property(lambda self: len(self.outputs))
 
 class Impl(object):
     """An implementation for an Expression in an expression graph.
@@ -416,13 +511,15 @@ class Impl(object):
     n_outputs = 1
     name=None
 
-    @staticmethod
-    def allow_lazy(*args, **kwargs):
+    ExprCls=Expr
+
+    @classmethod
+    def allow_lazy(cls, *args, **kwargs):
         """
         A decorator for turning functions into the `fn` attribute of an Impl object.
         """
         def deco(fn):
-            return Impl(fn=fn,*args, **kwargs)
+            return cls(fn=fn,*args, **kwargs)
         return deco
 
     def __init__(self, fn, name=None):
@@ -432,19 +529,14 @@ class Impl(object):
     def __str__(self):
         return 'Impl_%s'%self.name
 
-    def Expr(self, inputs, outputs):
-        """Return an expression node standing for an application of `self.fn` to some inputs"""
-        rval = Expr(self, inputs, outputs)
-        for o in rval.outputs:
-            o.expr = rval
-        return rval
-
     @staticmethod
     def closure_from_args(args):
         """Return the closure if any of the args is Symbolic, else None"""
         for a in args:
             if isinstance(a, Symbol):
                 return a.closure
+    def new_expr(self, inputs, outputs):
+        return self.ExprCls.new(self, inputs, outputs)
 
     def __call__(self, *args):
         """Return Symbolic output if any of `args` is a symbol, otherwise return `self.fn(*args)` """
@@ -458,7 +550,7 @@ class Impl(object):
             # return a symbolic result
             inputs = [self.as_input(closure, a) for a in args]
             outputs = self.outputs_from_inputs(inputs)
-            expr = self.Expr(inputs, outputs)
+            expr = self.new_expr(inputs, outputs)
             if self.n_outputs>1:
                 return outputs
             else:
@@ -469,6 +561,7 @@ class Impl(object):
     def infer_type(self, expr):
         """
         Update the meta-data of inputs and outputs.
+        Return a set of types that were changed, or None if no changes were made.
 
         Raise TypeError() if inputs have become incompatible with expr.
         """
@@ -490,8 +583,9 @@ class Impl(object):
             if obj.closure is not closure:
                 raise ValueError('Input in foreign closure', obj)
             return obj
-        rval = closure.add_symbol(Symbol.new(closure, type=type_cls(constant=True, value=obj)))
-        closure.set_value(rval, rval.type.value)
+        type = type_cls()
+        type.make_constant(obj)
+        rval = closure.add_symbol(Symbol.new(closure, type=type, value=type.value))
         return  rval
 
     def outputs_from_inputs(self, inputs):
@@ -502,29 +596,13 @@ class Impl(object):
         """
         outputs = [Symbol.new(closure) for o in range(self.n_outputs)]
 
-class Expr(object):
-    """An implementation node in a expression graph. 
-    
-    This class is a glorified tuple, it has no interesting methods.
-    """
-    def __init__(self, impl, inputs, outputs):
-        self.impl = impl
-        self.inputs = list(inputs)
-        self.outputs = list(outputs)
-        #assert all Inputs and outputs are symbols
-        bad_inputs = [i for i in inputs if not isinstance(i, Symbol)]
-        bad_outputs =[i for i in outputs if not isinstance(i, Symbol)] 
-        assert not bad_inputs, bad_inputs
-        assert not bad_outputs, bad_outputs
-    def __str__(self):
-        return 'Expr{%s}'%str(self.impl)
-    n_inputs = property(lambda self: len(self.inputs))
-    n_outputs = property(lambda self: len(self.outputs))
-
 def default_function_closure_ctor():
     return SpecializedClosure(transform.TransformPolicy.new())
-def function(inputs, outputs, closure_ctor=default_function_closure_ctor,
-        givens=None, updates=None):
+
+def function(inputs, outputs, 
+        closure_ctor=default_function_closure_ctor,
+        givens=None,
+        updates=None):
     if isinstance(outputs, Symbol):
         outputs = [outputs]
         return_outputs0 = True
@@ -539,12 +617,10 @@ def function(inputs, outputs, closure_ctor=default_function_closure_ctor,
         raise NotImplementedError('updates arg is not implemented yet')
 
     closure = closure_ctor()
-    cloned_inputs = [closure.clone(i) for i in inputs]
-    replacements = dict(zip(inputs, cloned_inputs))
-    cloned_outputs = [closure.clone(o, replacements) for o in outputs]
+    print closure.clone_dict
+    cloned_inputs = [closure.clone(i, recurse=False) for i in inputs]
+    cloned_outputs = [closure.clone(o, recurse=True) for o in outputs]
     closure.set_io(cloned_inputs, cloned_outputs, updates, return_outputs0)
-
-    cloned_inputs = [closure.add_symbol(i.clone(closure,as_constant=False)) for i in inputs]
     return closure
 
 def io_toposort(inputs, outputs, orderings):
@@ -556,7 +632,7 @@ def io_toposort(inputs, outputs, orderings):
 
     """
 
-    assert isinstance(r_out, (tuple, list, deque))
+    assert isinstance(outputs, (tuple, list, deque))
 
     iset = set(inputs)
 

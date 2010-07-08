@@ -51,7 +51,7 @@ __docformat__ = "restructuredtext en"
 import numpy as np
 from scipy import linalg
 
-from scikits.lazy import Impl
+from scikits.lazy import lnumpy
 
 
 def convert_colorspace(arr, fromspace, tospace):
@@ -114,7 +114,7 @@ def _prepare_colorarray(arr, dtype=np.float32):
 
     return arr.astype(dtype)
 
-
+@lnumpy.NdarrayImpl.allow_lazy()
 def rgb2hsv(rgb):
     """RGB to HSV color space conversion.
 
@@ -189,6 +189,7 @@ def rgb2hsv(rgb):
     return out
 
 
+@lnumpy.NdarrayImpl.allow_lazy()
 def hsv2rgb(hsv):
     """HSV to RGB color space conversion.
 
@@ -281,8 +282,25 @@ rgb_from_rgbcie = np.dot(rgb_from_xyz, xyz_from_rgbcie)
 #-------------------------------------------------------------
 # The conversion functions that make use of the matrices above
 #-------------------------------------------------------------
+class ColorConvert3x3(lnumpy.NdarrayImpl):
+    def infer_type(self, expr):
+        changed = set()
+        out, = expr.outputs
+        colormap, img = expr.inputs
+        if img.type.shape is None:
+            img.type.shape = (None, None, 3)
+            changed.add(img)
+        out.type.contiguous=True
+        out.type.shape=img.type.shape
+        out.type.value_dtype=np.dtype('float32')
+        changed.add(out) # TODO: how to monitor changes of Types 
+        # more reliably, and with finer grain over what has been changed?
+        # define some custom properties for the Type object to use?
+        # those properties can't act recursively though... catching changes
+        # to variables in complicated data structures reliably is impossible in Python I think.
+        return changed
 
-@Impl.allow_lazy()
+@ColorConvert3x3.allow_lazy(name='color_convert_3x3')
 def _convert(matrix, arr):
     """Do the color space conversion.
 
@@ -302,7 +320,7 @@ def _convert(matrix, arr):
     arr = np.swapaxes(arr, 0, 2)
     oldshape = arr.shape
     arr = np.reshape(arr, (3, -1))
-    out = np.dot(matrix, arr)
+    out = np.dot(matrix.astype('float32'), arr)
     out.shape = oldshape
     out = np.swapaxes(out, 2, 0)
 
