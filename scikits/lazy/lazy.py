@@ -17,11 +17,16 @@ define specialized functions.
 """
 import copy
 
-import exprgraph
 import transform
 
-class UndefinedValue(object): pass
-class MissingValue(Exception):pass
+class UndefinedValue(object):
+    """
+    The value of a Symbol's ``value`` attribute when no value is defined.
+    """
+class MissingValue(Exception):
+    """
+    A value required to evalute an expression is missing
+    """
 
 class Type(object):
     """
@@ -112,7 +117,6 @@ class Symbol(object):
         """
         return self.closure.compute_value(self)
 
-exprgraph.Symbol=Symbol # hack around circular dependency
 class Closure(object):
     """A Closure encapsulates a set of Symbols that can be connected by Expressions.
 
@@ -162,6 +166,12 @@ class Closure(object):
         self.elements.add(symbol)
         symbol.closure = self
         return symbol
+    def remove_symbol(self, symbol):
+        for s_foreign, s_local in self.clone_dict.items():
+            if s_local is symbol:
+                del self.clone_dict[s_foreign]
+        self.elements.remove(symbol)
+        symbol.closure = None
 
 class IncrementalClosure(Closure):
     """
@@ -206,8 +216,16 @@ class SpecializedClosure(Closure):
 
     Attributes:
 
-     transform_policy - a callable object that will rewire the graph [for faster
-                        evaluation].
+     transform_policy       - a callable object that will rewire the graph [for faster
+                              evaluation].
+     on_is_valid            - set of callables that must all return True for the closure to be valid. They
+                              are called with the closure as an argument.
+     on_replace_symbol_pre  - set of callables run before replacing a symbol (closure, old_symbol, new_symbol)
+     on_replace_symbol_post - set of callables run after replacing a symbol (closure, old_symbol, new_symbol)
+     on_replace_symbols_pre - set of callables run before replacing a set of symbols (closure, old_new_list)
+     on_replace_symbols_post- set of callables run after replacing a set of symbols (closure, old_new_list)
+     on_replace_impl_pre    - set of callables run before replacing an impl (closure, expr, impl)
+     on_replace_impl_post   - set of callables run after replacing an impl (closure, expr, impl)
      
     """
     def __init__(self, transform_policy):
@@ -215,8 +233,33 @@ class SpecializedClosure(Closure):
         self._iterating = False
         self._modified_since_iterating = False
         self.transform_policy = transform_policy
+        self.revert_fns = []
 
+        self.on_is_valid = set()
+        self.on_replace_symbol_pre = set()
+        self.on_replace_symbol_post = set()
+        self.on_replace_symbols_pre = set()
+        self.on_replace_symbols_post = set()
+        self.on_replace_impl_pre = set()
+        self.on_replace_impl_post = set()
+    def add_symbol(self, symbol):
+        rval = super(SpecializedClosure,self).add_symbol(symbol)
+        rval.clients = []
+        return rval
 
+    def remove_symbol(self, symbol):
+        assert symbol.closure == self
+        if symbol in self.inputs:
+            raise ValueError('Cannot remove input symbol', symbol)
+        if symbol in self.outputs:
+            raise ValueError('Cannot remove output symbol', symbol)
+        if symbol.clients:
+            raise ValueError('Cannot remove symbol with clients', symbol)
+        super(SpecializedClosure, self).remove_symbol(symbol)
+        if symbol.expr and all(((o.closure is None) and (not o.clients)) for o in symbol.expr.outputs):
+            # no outputs are in use, so remove symbol.expr as client
+            for pos, s_input in enumerate(symbol.expr.inputs):
+                s_input.clients.remove((symbol.expr, pos))
     def set_io(self, inputs, outputs, updates, unpack_single_output):
         if updates:
             #TODO: translate the updates into the cloned graph
@@ -229,23 +272,95 @@ class SpecializedClosure(Closure):
         self.unpack = unpack_single_output and len(outputs)==1
         self.transform_policy(self)
 
-    def change_input(self, expr, position, new_symbol):
-        """Change
-        """
-        #PRE-HOOK
-        raise NotImplementedError()
-        #POST-HOOK
+    #
+    # Methods for undoing transactions
+    #
 
-        #TODO: install a change_input post-hook to set modified_since_iterating to True
-        # call pre-hooks
+    def get_state(self):
+        """
+        Return a handle to the current state of the closure
+        """
+        return len(self.revert_fns)
+    def revert_to_state(self, state):
+        """
+        Reset the state of the closure to what it was when `state` was returned by `get_state`.
+
+        Invalidates states returned since `state`.
+        """
+        if state > len(self.revert_fns):
+            raise ValueError('state has been invalidated by revert_to_state of a previous state')
+        while len(self.revert_fns)>state:
+            self.revert_fns.pop()()
+
+    if 0:
+        def add_alternative(self, symbol, new_symbol):
+            """Register `new_symbol` as a potential replacement for symbol
+            """
+            #PRE-HOOK
+            raise NotImplementedError()
+            #POST-HOOK
+
+    def replace_symbol(self, symbol, new_symbol):
+        """
+        Replace all references to symbol in closure with references to new_symbol.
+        """
+        for fn in self.on_replace_symbol_pre:
+            fn(self, symbol, new_symbol)
+        for client,position in symbol.clients:
+            assert client.inputs[position] is symbol
+            client.inputs[position] = new_symbol
+        def undo():
+            for client,position in symbol.clients:
+                client.inputs[position] = symbol
+        self.revert_fns.append(undo)
         if self._iterating:
             self._modified_since_iterating = True
-        # call post-hooks
-    def replace_impl(self, expr, new_impl):
-        #PRE-HOOK
-        expr.impl = new_impl
-        #POST-HOOK
+        for fn in self.on_replace_symbol_post:
+            fn(self, symbol, new_symbol)
 
+    def replace_symbols(self, old_new_iterable):
+        """
+        Replace all symbols, or revert the transaction
+        """
+        old_new_iterable = list(old_new_iterable)
+        for fn in self.on_replace_symbol_pre:
+            fn(self, symbol, new_symbol)
+        state = self.get_state()
+        try:
+            for s_old, s_new in old_new_iterable:
+                self.replace_symbol(s_old, s_new)
+        except:
+            # in debugger: s_old and s_new were the troublemakers
+            self.revert_to_state(state)
+            raise
+
+    def replace_impl(self, expr, new_impl):
+        for fn in self.on_replace_impl_pre:
+            fn(self, expr, new_impl)
+        old_impl = expr.impl
+        expr.impl = new_impl
+        def undo():
+            expr.impl = old_impl
+        self.revert_fns.append(undo)
+        if self._iterating:
+            #most times replacing an implementation is fine, but sometimes
+            # an implementation can have different view_map and destroy_map properties
+            # which have an effect on the evaluation order.
+            self._modified_since_iterating = True
+        for fn in self.on_replace_impl_post:
+            fn(self, expr, new_impl)
+
+    def is_valid(self):
+        """Return True IFF closure can be evaluated"""
+        for fn in self.on_is_valid:
+            if not fn(self):
+                return False
+        # sort the graph to make sure an order exists
+        # TODO: consider making a plugin do this, so that 
+        #       the plugin can be replaced by the destroyhandler
+        io_toposort(self.inputs, self.outputs)
+        return True
+        
     def print_eval_order(self):
         for i,impl in enumerate(self.expr_iter()):
             print i,impl
@@ -256,7 +371,7 @@ class SpecializedClosure(Closure):
         Raises an exception if you try to continue iterating after
         modifying the expression graph.
         """
-        things = [e for e in exprgraph.io_toposort(self.inputs, self.outputs) if filter_fn(e)]
+        things = [e for e in io_toposort(self.inputs, self.outputs) if filter_fn(e)]
         self._iterating = True
         for e in things:
             if self._modified_since_iterating:
@@ -289,42 +404,58 @@ class SpecializedClosure(Closure):
 default_closure = IncrementalClosure()
 
 class Impl(object):
-    """
+    """An implementation for an Expression in an expression graph.
 
     Attributes:
-      fn - a normal [non-symbolic] function that does the computations
+      fn - a normal [non-symbolic] function for which this Impl stands.
+      n_outputs - the number of outputs fn will return
     """
+    fn_protocol = 'normal' #alternatives are 'cond' and maybe others in future.
+    view_map = {}
+    destroy_map = {}
+    n_outputs = 1
+    name=None
+
     @staticmethod
     def allow_lazy(*args, **kwargs):
+        """
+        A decorator for turning functions into the `fn` attribute of an Impl object.
+        """
         def deco(fn):
             return Impl(fn=fn,*args, **kwargs)
         return deco
 
-    def __init__(self, fn, n_outputs=1, name=None, closure=default_closure):
-        self.n_outputs=n_outputs
+    def __init__(self, fn, name=None):
         self.fn = fn
         self.name = name
-        self.closure = closure
 
     def __str__(self):
         return 'Impl_%s'%self.name
 
-    def Expr(self, args, outputs):
-        rval = Expr(self, args, outputs)
+    def Expr(self, inputs, outputs):
+        """Return an expression node standing for an application of `self.fn` to some inputs"""
+        rval = Expr(self, inputs, outputs)
         for o in rval.outputs:
             o.expr = rval
         return rval
 
     @staticmethod
     def closure_from_args(args):
+        """Return the closure if any of the args is Symbolic, else None"""
         for a in args:
             if isinstance(a, Symbol):
                 return a.closure
 
     def __call__(self, *args):
+        """Return Symbolic output if any of `args` is a symbol, otherwise return `self.fn(*args)` """
+        #
+        # This method implements an argument un-packing heuristic (n_outputs)
+        # This is supposed to be convenient most of the time.  If you are writing an Impl for
+        # which the heuristic doesn't work, feel free to override __call__.
+        #
         closure = self.closure_from_args(args)
-
         if closure:
+            # return a symbolic result
             inputs = [self.as_input(closure, a) for a in args]
             outputs = self.outputs_from_inputs(inputs)
             expr = self.Expr(inputs, outputs)
@@ -335,33 +466,47 @@ class Impl(object):
         else:
             return self.fn(*args)
 
-    def infer_type(self, expr, changed):
+    def infer_type(self, expr):
         """
         Update the meta-data of inputs and outputs.
 
-        Explicitly mark .meta attributes as being modified by setting
-        <symbol>.meta.changed = True
+        Raise TypeError() if inputs have become incompatible with expr.
         """
         pass
 
-    def as_input(self, closure, obj, constant_type=Constant):
-        """Convenience method - it's the default constructor for lazy Impl __call__ methods to
-        use to easily turn all inputs into symbols.
+    def as_input(self, closure, obj, type_cls=Type):
+        """Return a Symbol in `closure` for `obj`.
+
+        This is a helper method used by Impl.__call__.
+
+        If `obj` is not a symbol, it will be wrapped in one and assigned a type with the
+        type_cls constructor.
+        ``type = type_cls(constant=True, value=obj)``
+
+        Raises ValueError on an obj of a foreign closure, does not catch any exceptions from
+        type_cls.
         """
         if isinstance(obj, Symbol):
             if obj.closure is not closure:
                 raise ValueError('Input in foreign closure', obj)
             return obj
-        rval = closure.add_symbol(Symbol.new(closure, type=constant_type(obj)))
+        rval = closure.add_symbol(Symbol.new(closure, type=type_cls(constant=True, value=obj)))
         closure.set_value(rval, rval.type.value)
         return  rval
 
-
     def outputs_from_inputs(self, inputs):
+        """Return `self.n_output` Symbols for the outputs of an Expr of this Impl.
+
+        This is a helper method used by Impl.__call__.
+        Override this method to return different types of symbols with Impl.__call__.
+        """
         outputs = [Symbol.new(closure) for o in range(self.n_outputs)]
 
 class Expr(object):
-    """An implementation node in a expression graph.  """
+    """An implementation node in a expression graph. 
+    
+    This class is a glorified tuple, it has no interesting methods.
+    """
     def __init__(self, impl, inputs, outputs):
         self.impl = impl
         self.inputs = list(inputs)
@@ -375,7 +520,6 @@ class Expr(object):
         return 'Expr{%s}'%str(self.impl)
     n_inputs = property(lambda self: len(self.inputs))
     n_outputs = property(lambda self: len(self.outputs))
-exprgraph.Expr=Expr
 
 def default_function_closure_ctor():
     return SpecializedClosure(transform.TransformPolicy.new())
@@ -403,3 +547,64 @@ def function(inputs, outputs, closure_ctor=default_function_closure_ctor,
     cloned_inputs = [closure.add_symbol(i.clone(closure,as_constant=False)) for i in inputs]
     return closure
 
+def io_toposort(inputs, outputs, orderings):
+    """Returns sorted list of expression nodes
+
+    inputs - list of inputs
+    outputs - list of outputs
+    orderings - dict of additions to the normal inputs and outputs constraints
+
+    """
+
+    assert isinstance(r_out, (tuple, list, deque))
+
+    iset = set(inputs)
+
+    expand_cache = {}
+    start=deque(outputs)
+    rval_set = set()
+    rval_set.add(id(None))
+    rval_list = list()
+    expand_inv = {}
+    sources = deque()
+    while start:
+        l = start.pop()# this makes the search dfs
+        if id(l) not in rval_set:
+            rval_list.append(l)
+            rval_set.add(id(l))
+            if l in iset:
+                assert not orderings.get(l, [])
+                expand_l = []
+            else:
+                try:
+                    if l.expr:
+                        expand_l = [l.expr]
+                    else:
+                        expand_l = []
+                except AttributeError:
+                    expand_l = list(l.inputs)
+                expand_l.extend(orderings.get(l, []))
+            if expand_l:
+                for r in expand_l:
+                    expand_inv.setdefault(r, []).append(l)
+                start.extend(expand_l)
+            else:
+                sources.append(l)
+            expand_cache[l] = expand_l
+    assert len(rval_list) == len(rval_set)-1
+
+    rset = set()
+    rlist = []
+    while sources:
+        node = sources.popleft()
+        if node not in rset:
+            rlist.append(node)
+            rset.add(node)
+            for client in expand_inv.get(node, []):
+                expand_cache[client] = [a for a in expand_cache[client] if a is not node]
+                if not expand_cache[client]:
+                    sources.append(client)
+
+    if len(rlist) != len(rval_list):
+        raise ValueError('graph contains cycles')
+    return rlist

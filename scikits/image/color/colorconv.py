@@ -51,6 +51,8 @@ __docformat__ = "restructuredtext en"
 import numpy as np
 from scipy import linalg
 
+from scikits.lazy import Impl
+
 
 def convert_colorspace(arr, fromspace, tospace):
     """Convert an image array to a new color space.
@@ -280,6 +282,7 @@ rgb_from_rgbcie = np.dot(rgb_from_xyz, xyz_from_rgbcie)
 # The conversion functions that make use of the matrices above
 #-------------------------------------------------------------
 
+@Impl.allow_lazy()
 def _convert(matrix, arr):
     """Do the color space conversion.
 
