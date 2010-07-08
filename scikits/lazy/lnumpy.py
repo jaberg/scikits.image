@@ -32,6 +32,10 @@ class NdarrayType(Type):
         if (self.databuffer != None) and obj.data != self.databuffer: return False
         return True
     def coerce(self, obj):
+        """
+        TODO: Explain how to think about whether this function
+        could change `obj` or raise a TypeError.
+        """
         if self.is_conformant(obj): return obj
         if self.constant: raise TypeError('', (obj, self.value))
         if self.databuffer is not None: raise TypeError()
@@ -58,7 +62,7 @@ class NdarrayType(Type):
             if any(a!=b for (a,b) in zip(self.strides, nda.strides) if a is not None):
                 raise TypeError('stride mismatch', obj)
         return nda
-    def eq(self, v0, v1, approx=False):
+    def values_eq(self, v0, v1, approx=False):
         if approx:
             return numpy.allclose(v0, v1)
         else:
@@ -69,6 +73,10 @@ class NdarrayType(Type):
         self.shape=self.value.shape
         self.strides=self.value.strides
         self.databuffer=self.value.data
+
+    def __repr__(self):
+        return 'NdarrayType{constant=%s,dtype=%s,shape=%s,strides=%s,contiguous=%s,symmetric=%s}'%(
+            self.constant, self.dtype, self.shape, self.strides, self.contiguous, self.symmetric)
 
 
 class NdarraySymbol(Symbol):
@@ -133,6 +141,12 @@ class Elemwise(NdarrayImpl):
                     if o.type.shape != out_shp:
                         o.type.shape = out_shp
                         changed.add(o)
+        # INFER SYMMETRY
+        if all([i.type.symmetric for i in expr.inputs]):
+            for o in expr.outputs:
+                if not o.type.symmetric:
+                    o.type.symmetric = True
+                    changed.add(o)
         return changed
 
 class NumpyElemwise (Elemwise):

@@ -292,7 +292,7 @@ class ColorConvert3x3(lnumpy.NdarrayImpl):
             changed.add(img)
         out.type.contiguous=True
         out.type.shape=img.type.shape
-        out.type.value_dtype=np.dtype('float32')
+        out.type.dtype=np.dtype('float32')
         changed.add(out) # TODO: how to monitor changes of Types 
         # more reliably, and with finer grain over what has been changed?
         # define some custom properties for the Type object to use?

@@ -78,7 +78,7 @@ class Type(object):
         self.value = self.coerce(value)
         self.constant = True
 
-    def eq(self, v0, v1, approx=False):
+    def values_eq(self, v0, v1, approx=False):
         """Return True iff v0 and v1 are [`approx`] equal in the context of this Type. 
 
         The return value when neither v0 nor v1 is conformant is undefined.
