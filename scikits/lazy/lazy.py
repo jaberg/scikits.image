@@ -30,30 +30,42 @@ class MissingValue(Exception):
     A value required to evalute an expression is missing
     """
 
-class Type(object):
+class Symbol(object):
+    """A value node in an expression graph.
+
+    Attributes
+      value - this symbol stands for this particular value
+      name - for debugging and pretty-printing
+      expr - the Expr of which this is an output (may be None)
+      clients - set of (expr, position) pairs where this symbol is an input (may be absent)
+      closure - the Closure in which this symbol lives
     """
-    Class to represent a set of possible data values.
-
-    A Type is attached to a Symbol.
-
-    Properties and attributes of a Type instance parametrize the kind of data that a Symbol
-    might represent.
-
-    """
+    constant = property(lambda s: s.value is not UndefinedValue)
     @classmethod
-    def new(cls, constant=False, value=UndefinedValue, *args, **kwargs):
-        rval = cls(*args, **kwargs)
-        if constant:
-            rval.make_constant(rval.coerce(value))
-        return rval
-    constant = False
-    value = UndefinedValue
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
+    def new(cls, closure=None, expr=None, value=UndefinedValue,name=None):
+        """Return a Symbol instance within the given closure
+        """
+        if closure is None:
+            closure = default_closure
+        rval = cls(set(),None, expr,value,name)
+        if value is not UndefinedValue:
+            rval.update_from_value()
+        return closure.add_symbol(rval)
+
+    def __init__(self, clients, closure, expr, value, name):
+        self.clients = clients
+        self.closure = closure
+        self.expr = expr
+        self.value = value
+        self.name = name
+
+    def update_from_value(self):
+        """Considering self.value to be permanent, update any metadata attributes"""
+        pass
 
     def is_conformant(self, value):
         """
-        Return True iff value is consistent with this Type.
+        Return True iff value is consistent with this Symbol.
 
         This function can be used in self-verifying execution modes,
         to ensure that Impls return the sort of objects they promised to return.
@@ -77,9 +89,18 @@ class Type(object):
             raise TypeError(value)
         return value
 
-    def make_constant(self, value):
-        self.value = self.coerce(value)
-        self.constant = True
+    def clone(self, new_closure):
+        if self.value is UndefinedValue:
+            # basically do a deepcopy, but treat a few fields specially:
+            dct = dict(self.__dict__)
+            del dct['closure']
+            del dct['expr']
+            if 'clients' in dct: del dct['clients']
+            rval = self.__class__.new(closure=new_closure, expr=None)
+            rval.__dict__.update(copy.deepcopy(dct))
+            return rval
+        else:
+            return self.__class__.new(closure=new_closure, value=self.value)
 
     def values_eq(self, v0, v1, approx=False):
         """Return True iff v0 and v1 are [`approx`] equal in the context of this Type. 
@@ -89,39 +110,6 @@ class Type(object):
         """
         return v0 == v1
 
-    def get_clear_value(self):
-        """Return an object that represents an undefined value."""
-        if self.constant:
-            return self.value
-        return UndefinedValue
-    def clone(self):
-        if self.constant:
-            return self
-        return copy.deepcopy(self)
-
-class Symbol(object):
-    """A value node in an expression graph.
-    """
-    Type=Type
-    @classmethod
-    def new(cls, closure=None, expr=None, type=None,value=UndefinedValue,name=None):
-        """Return a Symbol instance within the given closure
-        """
-        if closure is None:
-            closure = default_closure
-        if type is None:
-            type = cls.Type()
-        if value is not type.get_clear_value():
-            value = type.coerce(value)
-        rval = cls(None, expr,type,value,name)
-        return closure.add_symbol(rval)
-
-    def __init__(self, closure, expr, type, value, name):
-        self.closure = closure
-        self.expr = expr
-        self.type = type
-        self.value = value
-        self.name = name
 
     def compute(self):
         """Return the value for this variable
@@ -165,13 +153,7 @@ class Closure(object):
             return self.clone_dict[orig_symbol]
         else:
             # single clone of orig_symbol
-            rval = self.add_symbol(
-                    orig_symbol.__class__.new(
-                        closure=self,
-                        expr=None,
-                        type=orig_symbol.type.clone(),
-                        value=orig_symbol.value,
-                        name=orig_symbol.name))
+            rval = orig_symbol.clone(self)
             self.clone_dict[orig_symbol] = rval
             #print "CLONE Returning", rval
             return rval
@@ -230,12 +212,12 @@ class IncrementalClosure(Closure):
             results = expr.impl.fn(*args)
             if expr.n_outputs>1:
                 for s,r in zip(expr.outputs, results):
-                    s.value = s.type.coerce(r)
+                    s.value = s.coerce(r)
                     if not (s.value is r):
                         print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
             else:
                 # one output means `symbol` must be that one output
-                symbol.value = symbol.type.coerce(results)
+                symbol.value = symbol.coerce(results)
                 if not (symbol.value is results):
                     print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
         return symbol.value
@@ -435,9 +417,9 @@ class SpecializedClosure(Closure):
         self._modified_since_iterating = False
 
     def constant_iter(self):
-        return self.nodes_iter(lambda o: hasattr(o, 'type') and getattr(o.type, 'constant', False))
+        return self.nodes_iter(lambda o: getattr(o, 'constant', False))
     def symbol_iter(self):
-        return self.nodes_iter(lambda o: hasattr(o, 'type'))
+        return self.nodes_iter(lambda o: hasattr(o, 'expr'))
     def expr_iter(self):
         return self.nodes_iter(lambda o: hasattr(o, 'impl'))
     def expr_iter_with_Impl(self, ImplClass):
@@ -459,7 +441,7 @@ class SpecializedClosure(Closure):
             for c in self.constant_iter():
                 computed[c] = c.value
         for i, a in zip(self.inputs, args):
-            if not i.type.is_conformant(a):
+            if not i.is_conformant(a):
                 raise TypeError(a)
             computed[i] = a
 
@@ -475,12 +457,12 @@ class SpecializedClosure(Closure):
             if expr.n_outputs>1:
                 assert len(results) == len(expr.outputs)
                 for s,r in zip(expr.outputs, results):
-                    computed[s] = s.type.coerce(r) # coerce returns r (quickly) if r is conformant
+                    computed[s] = s.coerce(r) # coerce returns r (quickly) if r is conformant
                     if not (computed[s] is r):
                         print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
             else:
                 # one output means `symbol` must be that one output
-                computed[expr.outputs[0]] = expr.outputs[0].type.coerce(results)
+                computed[expr.outputs[0]] = expr.outputs[0].coerce(results)
                 if not (computed[expr.outputs[0]] is results):
                     print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
 
@@ -597,21 +579,19 @@ class Impl(object):
 
     def infer_type(self, expr):
         """
-        Update the meta-data of inputs and outputs.
-        Return a set of types that were changed, or None if no changes were made.
+        Update the meta-data attributes of input and output symbols.
+        Return a set of symbols that were changed, or None if no changes were made.
 
         Raise TypeError() if inputs have become incompatible with expr.
         """
         pass
 
-    def as_input(self, closure, obj, type_cls=Type):
+    def as_input(self, closure, obj, symbol_ctor=Symbol.new):
         """Return a Symbol in `closure` for `obj`.
 
         This is a helper method used by Impl.__call__.
 
-        If `obj` is not a symbol, it will be wrapped in one and assigned a type with the
-        type_cls constructor.
-        ``type = type_cls(constant=True, value=obj)``
+        If `obj` is not a symbol, it will be wrapped in one.
 
         Raises ValueError on an obj of a foreign closure, does not catch any exceptions from
         type_cls.
@@ -620,10 +600,7 @@ class Impl(object):
             if obj.closure is not closure:
                 raise ValueError('Input in foreign closure', obj)
             return obj
-        type = type_cls()
-        type.make_constant(obj)
-        rval = closure.add_symbol(Symbol.new(closure, type=type, value=type.value))
-        return  rval
+        return symbol_ctor(closure=closure, value=obj)
 
     def outputs_from_inputs(self, inputs):
         """Return `self.n_output` Symbols for the outputs of an Expr of this Impl.

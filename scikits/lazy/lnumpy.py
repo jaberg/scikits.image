@@ -4,16 +4,22 @@ A numpy-like module with support for lazy evaluation
 :licence: modified BSD
 """
 import numpy
-from .lazy import Symbol, Impl, Type
+from .lazy import Symbol, Impl
 
-class NdarrayType(Type):
-    # None means unknown
-    # For things which are not generally true (symmetric, P.S.D)
-    # it is supposed to be convenient that unknown and False are both negative in terms of an
-    # if statement.  For boolean properties, make sure that False corresponds to the default
-    # setting.
-    constant = False
-    value = None
+class NdarraySymbol(Symbol):
+    def __array__(self):
+        return numpy.asarray(self.compute())
+
+    def __add__(self, other): return add(self, other)
+    def __sub__(self, other): return subtract(self, other)
+    def __mul__(self, other): return multiply(self, other)
+    def __div__(self, other): return divide(self, other)
+
+    def __radd__(other, self): return add(self, other)
+    def __rsub__(other, self): return subtract(self, other)
+    def __rmul__(other, self): return multiply(self, other)
+    def __rdiv__(other, self): return divide(self, other)
+
     dtype = None
     shape = None
     strides=None
@@ -21,8 +27,6 @@ class NdarrayType(Type):
     contiguous=None
     symmetric=None
     positive_semidefinite=None
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
     def is_conformant(self, obj):
         if self.constant: return (self.value is obj)
         if type(obj) != numpy.ndarray: return False
@@ -75,44 +79,28 @@ class NdarrayType(Type):
             return numpy.allclose(v0, v1)
         else:
             return numpy.all(v0 == v1)
-    def make_constant(self, value):
-        super(NdarrayType, self).make_constant(value)
+    def update_from_value(self):
+        super(NdarraySymbol, self).update_from_value()
         self.dtype=self.value.dtype
         self.shape=self.value.shape
         self.strides=self.value.strides
         self.databuffer=self.value.data
 
     def __repr__(self):
-        return 'NdarrayType{constant=%s,dtype=%s,shape=%s,strides=%s,contiguous=%s,symmetric=%s}'%(
+        return 'NdarraySymbol{constant=%s,dtype=%s,shape=%s,strides=%s,contiguous=%s,symmetric=%s}'%(
             self.constant, self.dtype, self.shape, self.strides, self.contiguous, self.symmetric)
-
-
-class NdarraySymbol(Symbol):
-    Type = NdarrayType
-    def __array__(self):
-        return numpy.asarray(self.compute())
-
-    def __add__(self, other): return add(self, other)
-    def __sub__(self, other): return subtract(self, other)
-    def __mul__(self, other): return multiply(self, other)
-    def __div__(self, other): return divide(self, other)
-
-    def __radd__(other, self): return add(self, other)
-    def __rsub__(other, self): return subtract(self, other)
-    def __rmul__(other, self): return multiply(self, other)
-    def __rdiv__(other, self): return divide(self, other)
 
 class NdarrayImpl(Impl):
     def outputs_from_inputs(self, inputs):
         closure = inputs[0].closure
-        outputs = [NdarraySymbol.new(closure, type=NdarrayType.new()) for o in range(self.n_outputs)]
+        outputs = [NdarraySymbol.new(closure) for o in range(self.n_outputs)]
         return outputs
 
-    def as_input(self, closure, obj, type_cls=NdarrayType):
+    def as_input(self, closure, obj, symbol_ctor=NdarraySymbol.new):
         """Convenience method - it's the default constructor for lazy Impl __call__ methods to
         use to easily turn all inputs into symbols.
         """
-        return super(NdarrayImpl, self).as_input(closure, obj, type_cls)
+        return super(NdarrayImpl, self).as_input(closure, obj, symbol_ctor)
 
 class Elemwise(NdarrayImpl):
     """
@@ -128,9 +116,9 @@ class Elemwise(NdarrayImpl):
         super(Elemwise, self).infer_type(expr, changed)
         print 'INFER_TYPE', expr, expr.inputs
         # if all inputs have an ndarray type
-        if all(isinstance(i.type, NdarrayType) for i in expr.inputs):
+        if all(isinstance(i, NdarraySymbol) for i in expr.inputs):
             # get the shapes of the inputs
-            shapes = [i.type.shape for i in expr.inputs if i.type.shape is not None]
+            shapes = [i.shape for i in expr.inputs if i.shape is not None]
             print 'SHAPES', expr, shapes, expr.inputs
             # if all the inputs have a known number of dimensions
             if len(shapes) == len(expr.inputs):
@@ -146,14 +134,14 @@ class Elemwise(NdarrayImpl):
                         out_shp[dim]= max(s[dim] for s in shapes)
                 out_shp = tuple(out_shp)
                 for o in expr.outputs:
-                    if o.type.shape != out_shp:
-                        o.type.shape = out_shp
+                    if o.shape != out_shp:
+                        o.shape = out_shp
                         changed.add(o)
         # INFER SYMMETRY
-        if all([i.type.symmetric for i in expr.inputs]):
+        if all([i.symmetric for i in expr.inputs]):
             for o in expr.outputs:
-                if not o.type.symmetric:
-                    o.type.symmetric = True
+                if not o.symmetric:
+                    o.symmetric = True
                     changed.add(o)
         return changed
 

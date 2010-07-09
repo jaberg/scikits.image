@@ -28,15 +28,14 @@ def replace_colorconvert_with_opencl(closure, **kwargs):
     replacements = []
     for expr in closure.expr_iter_with_Impl(colorconv.ColorConvert3x3):
         m3x3, img = expr.inputs
-        if m3x3.type.constant and m3x3.type.dtype == np.dtype('float64'):
+        if m3x3.constant and m3x3.dtype == np.dtype('float64'):
             print 'Converting to float32'
             m3x3 = lnumpy.NdarraySymbol.new(
                     closure=m3x3.closure,
                     value = m3x3.value.astype('float32'))
-            m3x3.type.make_constant(m3x3.value)
 
-        if None is not m3x3.type.dtype and None is not img.type.dtype:
-            new_impl = ColorConvert3x3_OpenCL.build_for_types(m3x3.type.dtype, img.type.dtype)
+        if None is not m3x3.dtype and None is not img.dtype:
+            new_impl = ColorConvert3x3_OpenCL.build_for_types(m3x3.dtype, img.dtype)
             new_out = new_impl(m3x3, img)
             replacements.append((expr.outputs[0], new_out))
     for swap in replacements:

@@ -74,9 +74,9 @@ class TestColorconv(TestCase):
         # create an input, and make some promises about it.
         img = lazy.lnumpy.NdarraySymbol.new(value=self.colbars_array)
         img.value = img.value.astype('float32')
-        img.type.contiguous=True
-        img.type.shape = (None, None, 3)
-        img.type.dtype=np.dtype('float32')
+        img.contiguous=True
+        img.shape = (None, None, 3)
+        img.dtype=np.dtype('float32')
 
         assert_almost_equal(convert_colorspace(self.colbars_array, 'RGB',
                                                'RGB'), self.colbars_array)
@@ -102,9 +102,9 @@ class TestColorconv(TestCase):
 
         # create an input, and make some promises about it.
         img = lazy.lnumpy.NdarraySymbol.new()
-        img.type.contiguous=True
-        img.type.shape = (None, None, 3)
-        img.type.dtype=np.dtype('float32')
+        img.contiguous=True
+        img.shape = (None, None, 3)
+        img.dtype=np.dtype('float32')
 
         for i, space in enumerate(colspaces):
             print 'test: colorspace', space
@@ -120,9 +120,12 @@ class TestColorconv(TestCase):
                 return fn_yes_cl(imgdata)
             def without_cl():
                 return fn_no_cl(imgdata)
+            def orig_fn():
+                return convert_colorspace(imgdata, space, 'RGB')
 
-            print timeit.Timer(with_cl).repeat(3,3)
-            print timeit.Timer(without_cl).repeat(3,3)
+            print 'with_cl times', timeit.Timer(with_cl).repeat(3,3)
+            print 'without_cl times',timeit.Timer(without_cl).repeat(3,3)
+            print 'orig_fn times', timeit.Timer(orig_fn).repeat(3,3)
 
 if __name__ == "__main__":
     run_module_suite()
