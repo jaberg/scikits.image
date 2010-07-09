@@ -27,8 +27,16 @@ class NdarrayType(Type):
         if self.constant: return (self.value is obj)
         if type(obj) != numpy.ndarray: return False
         if (self.dtype != None) and obj.dtype != self.dtype: return False
-        if (self.shape != None) and obj.shape != self.shape: return False
-        if (self.strides != None) and obj.strides != self.strides: return False
+        if self.shape is not None:
+            if len(self.shape) != obj.ndim:
+                return False
+            if any(a!=b for (a,b) in zip(self.shape, obj.shape) if a is not None):
+                return False
+        if self.strides is not None:
+            if len(self.strides) != obj.strides:
+                return False
+            if any(a!=b for (a,b) in zip(self.strides, obj.strides) if a is not None):
+                return False
         if (self.databuffer != None) and obj.data != self.databuffer: return False
         return True
     def coerce(self, obj):

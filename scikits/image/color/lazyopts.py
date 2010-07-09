@@ -1,4 +1,6 @@
-from scikits.lazy import register_transform, transform_db
+import time
+import numpy as np
+from scikits.lazy import register_transform, transform_db, lnumpy, UndefinedValue
 
 from scikits.image.color import colorconv
 
@@ -26,19 +28,28 @@ def replace_colorconvert_with_opencl(closure, **kwargs):
     replacements = []
     for expr in closure.expr_iter_with_Impl(colorconv.ColorConvert3x3):
         m3x3, img = expr.inputs
-        new_impl = ColorConvert3x3_OpenCL.build_for_types(m3x3.type.dtype, img.type.dtype)
-        new_out = new_impl(m3x3, img)
-        replacements.append((expr.outputs[0], new_out))
+        if m3x3.type.constant and m3x3.type.dtype == np.dtype('float64'):
+            print 'Converting to float32'
+            m3x3 = lnumpy.NdarraySymbol.new(
+                    closure=m3x3.closure,
+                    value = m3x3.value.astype('float32'))
+            m3x3.type.make_constant(m3x3.value)
+
+        if None is not m3x3.type.dtype and None is not img.type.dtype:
+            new_impl = ColorConvert3x3_OpenCL.build_for_types(m3x3.type.dtype, img.type.dtype)
+            new_out = new_impl(m3x3, img)
+            replacements.append((expr.outputs[0], new_out))
     for swap in replacements:
         closure.replace_symbol(*swap)
 
 
 ctype_from_dtype = {
-    numpy.dtype('float32'):'float',
-    numpy.dtype('float64'):'double',
+    np.dtype('float32'):'float',
+    np.dtype('float64'):'double',
     }
 
 class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
+    fn_protocol = 'python_io'
     
     @classmethod
     def build_for_types(cls, m3x3_dtype, img_dtype):
@@ -50,8 +61,8 @@ class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
         prg = cl.Program(_cpu_context, """
             __kernel void elemwise(
                 const int N,
-                __global const %(i_ctype)s *img,
                 __global const %(m_ctype)s *m3x3,
+                __global const %(i_ctype)s *img,
                 __global %(o_ctype)s *out
                 )
             {
@@ -79,23 +90,40 @@ class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
                 }
             }
             """ % locals()).build()
-
-        def rval(m3x3, img):
-            nthreads=1 
+        def cl_fn((m3x3, img),(old_z,)):
+            n_threads=1 
             n_pixels = img.shape[0]*img.shape[1]
-            if n_pixels > 1000:
+            assert img.shape[2] == 3
+            assert m3x3.shape == (3,3)
+            if n_pixels > 10000:
                 #TODO: heuristic to choose how many threads
-                n_threads = 4
+                if not n_pixels % 8:
+                    n_threads = 8
+                if not n_pixels % 4:
+                    n_threads = 4
+                elif not n_pixels % 2:
+                    n_threads = 2
+            img = np.ascontiguousarray(img)
+            m3x3 = np.ascontiguousarray(m3x3)
+            if old_z is UndefinedValue:
+                z = np.empty_like(img)
+            else:
+                z = old_z
+                if z.shape != img.shape:
+                    z.resize(img.shape)
+
+            assert z.shape == img.shape
             
-            z = numpy.empty_like(a) #empty_like is faster, but can hide errors
-            a_buf = cl.Buffer(_cpu_context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=a)
+            a_buf = cl.Buffer(_cpu_context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=img)
             m_buf = cl.Buffer(_cpu_context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=m3x3)
             z_buf = cl.Buffer(_cpu_context, cl.mem_flags.WRITE_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=z)
-            rval = prg.elemwise(_cpu_queue, (nthreads,), None, 
-                    numpy.int64(n_pixels/nthreads), a_buf, m_buf, z_buf)
+
+            #print 'using threads', n_threads
+            rval = prg.elemwise(_cpu_queue, (n_threads,), None, 
+                    np.int64(n_pixels/n_threads), m_buf, a_buf, z_buf)
             rval.wait()  #not good if there are several OpenCL commands to do in sequence
             return z
         
-        return cls(fn=rval, name=cls.__name__)
+        return cls(fn=cl_fn, name=cls.__name__)
 
 

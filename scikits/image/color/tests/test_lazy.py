@@ -8,6 +8,7 @@
 """
 
 import os.path
+import timeit
 
 import numpy as np
 from numpy.testing import *
@@ -27,6 +28,9 @@ from scikits.image import data_dir
 from scikits import lazy
 
 import colorsys
+
+def assert_almost_equal(a,b,decimal=5):
+    return np.testing.assert_almost_equal(a,b,decimal=decimal)
 
 
 class TestColorconv(TestCase):
@@ -72,7 +76,7 @@ class TestColorconv(TestCase):
         img.value = img.value.astype('float32')
         img.type.contiguous=True
         img.type.shape = (None, None, 3)
-        img.type.value_dtype=np.dtype('float32')
+        img.type.dtype=np.dtype('float32')
 
         assert_almost_equal(convert_colorspace(self.colbars_array, 'RGB',
                                                'RGB'), self.colbars_array)
@@ -85,9 +89,40 @@ class TestColorconv(TestCase):
 
             gt = colfuncs_to[i](img)
             eval_gt = lazy.function([img], gt)
+            #eval_gt.print_eval_order()
             assert_almost_equal(convert_colorspace(self.colbars_array, 'RGB',
                                                    space), eval_gt(img.value))
 
+    def test_opencl_speed(self):
+        scikits.image.color.lazyopts.enable()
+        colspaces = ['RGB CIE', 'XYZ']
+        colfuncs_from = [ rgbcie2rgb, xyz2rgb]
+        colfuncs_to = [ rgb2rgbcie, rgb2xyz]
+        imgdata = np.random.RandomState(234).rand(1600,1200,3).astype('float32')
+
+        # create an input, and make some promises about it.
+        img = lazy.lnumpy.NdarraySymbol.new()
+        img.type.contiguous=True
+        img.type.shape = (None, None, 3)
+        img.type.dtype=np.dtype('float32')
+
+        for i, space in enumerate(colspaces):
+            print 'test: colorspace', space
+            gt = colfuncs_from[i](img)
+            scikits.image.color.lazyopts.enable()
+            fn_yes_cl = lazy.function([img], gt)
+            scikits.image.color.lazyopts.disable()
+            fn_no_cl = lazy.function([img], gt)
+
+            fn_yes_cl.reuse_computed = True # optimization
+
+            def with_cl():
+                return fn_yes_cl(imgdata)
+            def without_cl():
+                return fn_no_cl(imgdata)
+
+            print timeit.Timer(with_cl).repeat(3,3)
+            print timeit.Timer(without_cl).repeat(3,3)
 
 if __name__ == "__main__":
     run_module_suite()

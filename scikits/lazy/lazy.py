@@ -42,7 +42,10 @@ class Type(object):
     """
     @classmethod
     def new(cls, constant=False, value=UndefinedValue, *args, **kwargs):
-        return cls(*args, **kwargs)
+        rval = cls(*args, **kwargs)
+        if constant:
+            rval.make_constant(rval.coerce(value))
+        return rval
     constant = False
     value = UndefinedValue
     def __init__(self, **kwargs):
@@ -254,8 +257,12 @@ class SpecializedClosure(Closure):
      on_replace_symbols_post- set of callables run after replacing a set of symbols (closure, old_new_list)
      on_replace_impl_pre    - set of callables run before replacing an impl (closure, expr, impl)
      on_replace_impl_post   - set of callables run after replacing an impl (closure, expr, impl)
+
+     inputs  - list of symbols for which call arguments  provide values
+     outputs - list of symbols to return from call
      
     """
+    reuse_computed = False
     def __init__(self, transform_policy):
         super(SpecializedClosure, self).__init__()
         self._iterating = False
@@ -275,19 +282,6 @@ class SpecializedClosure(Closure):
         if not hasattr(rval, 'clients'):
             rval.clients = set()
         return rval
-
-    def add_expr(self, expr):
-        """Add an expression to this closure"""
-        rval = super(SpecializedClosure, self).add_expr(expr)
-        for i, s_i in enumerate(expr.inputs):
-            s_i.clients.add((expr, i))
-        return rval
-    def remove_expr(self, expr):
-        rval = super(SpecializedClosure, self).remove_expr(expr)
-        for i, s_i in enumerate(expr.inputs):
-            s_i.clients.remove((expr, i))
-        return rval
-
     def remove_symbol(self, symbol):
         assert symbol.closure == self
         if symbol in self.inputs:
@@ -301,6 +295,74 @@ class SpecializedClosure(Closure):
             # no outputs are in use, so remove symbol.expr as client
             for pos, s_input in enumerate(symbol.expr.inputs):
                 s_input.clients.remove((symbol.expr, pos))
+    def replace_symbol(self, symbol, new_symbol):
+        """
+        Replace all references to symbol in closure with references to new_symbol.
+        """
+        for fn in self.on_replace_symbol_pre:
+            fn(self, symbol, new_symbol)
+        for client,position in symbol.clients:
+            assert client.inputs[position] is symbol
+            client.inputs[position] = new_symbol
+        self.inputs = [(new_symbol if s is symbol else s) for s in self.inputs]
+        self.outputs = [(new_symbol if s is symbol else s) for s in self.outputs]
+        def undo():
+            for client,position in symbol.clients:
+                client.inputs[position] = symbol
+            self.inputs = [(symbol if s is new_symbol else s) for s in self.inputs]
+            self.outputs = [(symbol if s is new_symbol else s) for s in self.outputs]
+        self.revert_fns.append(undo)
+        if self._iterating:
+            self._modified_since_iterating = True
+        for fn in self.on_replace_symbol_post:
+            fn(self, symbol, new_symbol)
+    def replace_symbols(self, old_new_iterable):
+        """
+        Replace all symbols, or revert the transaction
+        """
+        old_new_iterable = list(old_new_iterable)
+        for fn in self.on_replace_symbol_pre:
+            fn(self, symbol, new_symbol)
+        state = self.get_state()
+        try:
+            for s_old, s_new in old_new_iterable:
+                self.replace_symbol(s_old, s_new)
+        except:
+            # in debugger: s_old and s_new were the troublemakers
+            self.revert_to_state(state)
+            raise
+
+
+
+    def add_expr(self, expr):
+        """Add an expression to this closure"""
+        rval = super(SpecializedClosure, self).add_expr(expr)
+        assert rval is expr
+        for i, s_i in enumerate(expr.inputs):
+            s_i.clients.add((expr, i))
+        return rval
+    def remove_expr(self, expr):
+        rval = super(SpecializedClosure, self).remove_expr(expr)
+        for i, s_i in enumerate(expr.inputs):
+            s_i.clients.remove((expr, i))
+        return rval
+    def replace_impl(self, expr, new_impl):
+        for fn in self.on_replace_impl_pre:
+            fn(self, expr, new_impl)
+        old_impl = expr.impl
+        expr.impl = new_impl
+        def undo():
+            expr.impl = old_impl
+        self.revert_fns.append(undo)
+        if self._iterating:
+            #most times replacing an implementation is fine, but sometimes
+            # an implementation can have different view_map and destroy_map properties
+            # which have an effect on the evaluation order.
+            self._modified_since_iterating = True
+        for fn in self.on_replace_impl_post:
+            fn(self, expr, new_impl)
+
+
     def set_io(self, inputs, outputs, updates, unpack_single_output):
         if updates:
             #TODO: translate the updates into the cloned graph
@@ -340,56 +402,6 @@ class SpecializedClosure(Closure):
             #PRE-HOOK
             raise NotImplementedError()
             #POST-HOOK
-
-    def replace_symbol(self, symbol, new_symbol):
-        """
-        Replace all references to symbol in closure with references to new_symbol.
-        """
-        for fn in self.on_replace_symbol_pre:
-            fn(self, symbol, new_symbol)
-        for client,position in symbol.clients:
-            assert client.inputs[position] is symbol
-            client.inputs[position] = new_symbol
-        def undo():
-            for client,position in symbol.clients:
-                client.inputs[position] = symbol
-        self.revert_fns.append(undo)
-        if self._iterating:
-            self._modified_since_iterating = True
-        for fn in self.on_replace_symbol_post:
-            fn(self, symbol, new_symbol)
-
-    def replace_symbols(self, old_new_iterable):
-        """
-        Replace all symbols, or revert the transaction
-        """
-        old_new_iterable = list(old_new_iterable)
-        for fn in self.on_replace_symbol_pre:
-            fn(self, symbol, new_symbol)
-        state = self.get_state()
-        try:
-            for s_old, s_new in old_new_iterable:
-                self.replace_symbol(s_old, s_new)
-        except:
-            # in debugger: s_old and s_new were the troublemakers
-            self.revert_to_state(state)
-            raise
-
-    def replace_impl(self, expr, new_impl):
-        for fn in self.on_replace_impl_pre:
-            fn(self, expr, new_impl)
-        old_impl = expr.impl
-        expr.impl = new_impl
-        def undo():
-            expr.impl = old_impl
-        self.revert_fns.append(undo)
-        if self._iterating:
-            #most times replacing an implementation is fine, but sometimes
-            # an implementation can have different view_map and destroy_map properties
-            # which have an effect on the evaluation order.
-            self._modified_since_iterating = True
-        for fn in self.on_replace_impl_post:
-            fn(self, expr, new_impl)
 
     def is_valid(self):
         """Return True IFF closure can be evaluated"""
@@ -434,21 +446,32 @@ class SpecializedClosure(Closure):
     def __call__(self, *args):
         if len(args) != len(self.inputs):
             raise TypeError('Wrong number of inputs')
-        computed = {}
+        if self.reuse_computed:
+            computed = getattr(self, 'computed', {})
+        else:
+            computed = {}
         #print 'ALL', list(self.nodes_iter(lambda x:True))
         #print "ELEMENTS", list(self.elements)
         #print "CONSTANTS", list(self.constant_iter())
         #print "INPUTS", self.inputs
         #print "INPUTS0 CLIENTS", self.inputs[0].clients
-        for c in self.constant_iter():
-            computed[c] = c.value
+        if not computed:
+            for c in self.constant_iter():
+                computed[c] = c.value
         for i, a in zip(self.inputs, args):
+            if not i.type.is_conformant(a):
+                raise TypeError(a)
             computed[i] = a
-        print computed
 
         for expr in self.expr_iter():
             args = [computed[i] for i in expr.inputs]
-            results = expr.impl.fn(*args)
+            if expr.impl.fn_protocol == 'python':
+                results = expr.impl.fn(*args)
+            elif expr.impl.fn_protocol == 'python_io':
+                old_rvals = [computed.get(i,UndefinedValue) for i in expr.outputs]
+                results = expr.impl.fn(args, old_rvals)
+            else:
+                raise NotImplementedError('Impl.fn_protocol', expr.impl.fn_protocol)
             if expr.n_outputs>1:
                 assert len(results) == len(expr.outputs)
                 for s,r in zip(expr.outputs, results):
@@ -462,9 +485,12 @@ class SpecializedClosure(Closure):
                     print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
 
         if self.unpack:
-            return computed[self.outputs[0]]
+            rval = computed[self.outputs[0]]
         else:
-            return [computed[o] for o in self.outputs]
+            rval = [computed[o] for o in self.outputs]
+        if self.reuse_computed:
+            self.computed=computed
+        return rval
 
 # The default closure is a database of values to use for symbols
 # that are not given as function arguments.
@@ -505,7 +531,18 @@ class Impl(object):
       fn - a normal [non-symbolic] function for which this Impl stands.
       n_outputs - the number of outputs fn will return
     """
-    fn_protocol = 'normal' #alternatives are 'cond' and maybe others in future.
+
+    #PROTOCOLS:
+    # 'python' - fn(*args) returns result (when n_inputs=1), returns results when n_inputs > 1
+    #            This is the simplest protocol to use, and it is the default.
+    # 'python_io' - fn(args, old_rval) returns same as 'python', but accepts previous return
+    #               value from the same expr as second argument.  Permits reusing storage so
+    #               it's typically faster than the 'python' protocol.
+    # 'cond' - fn(args, old_rval, outputs).  Returns a dictionary of which inputs are required
+    #          to compute which remaining outputs.  Stores computable outputs into the 'outputs'
+    #          argument list prior to returning.  Permits implementing 'if' and 'switch' type
+    #          expressions.
+    fn_protocol = 'python'
     view_map = {}
     destroy_map = {}
     n_outputs = 1
@@ -617,7 +654,6 @@ def function(inputs, outputs,
         raise NotImplementedError('updates arg is not implemented yet')
 
     closure = closure_ctor()
-    print closure.clone_dict
     cloned_inputs = [closure.clone(i, recurse=False) for i in inputs]
     cloned_outputs = [closure.clone(o, recurse=True) for o in outputs]
     closure.set_io(cloned_inputs, cloned_outputs, updates, return_outputs0)

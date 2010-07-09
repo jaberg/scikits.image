@@ -1,7 +1,7 @@
 
 from . import lazy
 from .lazy import (Impl, Symbol, Closure, IncrementalClosure, SpecializedClosure, Expr, Type,
-        function)
+        function, UndefinedValue)
 
 from .transform import register_transform, transform_db, TransformPolicy, TransformHandle
 
