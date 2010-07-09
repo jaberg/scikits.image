@@ -1,4 +1,4 @@
-import time
+import sys, time
 import numpy as np
 from scikits.lazy import register_transform, transform_db, lnumpy, UndefinedValue
 
@@ -16,9 +16,13 @@ import pyopencl as cl
 try:
     _cpu_context = cl.Context(dev_type=cl.device_type.CPU)
     _cpu_queue = cl.CommandQueue(_cpu_context)
-except cl.LogicError:
+except cl.LogicError, e:
     _cpu_context = None
     _cpu_queue = None
+    print >> sys.stderr, "WARNING: No OpenCL CPU context", str(e)
+    print >> sys.stderr, "         OpenCL Devices: ", [(p, p.get_devices()) for p in cl.get_platforms()]
+    _cpu_context = cl.create_some_context()
+    _cpu_queue = cl.CommandQueue(_cpu_context)
 
 
 @register_transform(transform_db['begin_backend'].position + 0.1, 'default')
@@ -59,7 +63,7 @@ class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
 
         prg = cl.Program(_cpu_context, """
             __kernel void elemwise(
-                const int N,
+                const long N,
                 __global const %(m_ctype)s *m3x3,
                 __global const %(i_ctype)s *img,
                 __global %(o_ctype)s *out
