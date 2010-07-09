@@ -19,8 +19,7 @@ try:
 except cl.LogicError, e:
     _cpu_context = None
     _cpu_queue = None
-    print >> sys.stderr, "WARNING: No OpenCL CPU context", str(e)
-    print >> sys.stderr, "         OpenCL Devices: ", [(p, p.get_devices()) for p in cl.get_platforms()]
+    print >> sys.stderr, "WARNING: No default CPU context", str(e)
     _cpu_context = cl.create_some_context()
     _cpu_queue = cl.CommandQueue(_cpu_context)
 
