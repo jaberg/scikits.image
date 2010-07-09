@@ -115,6 +115,8 @@ class TestColorconv(TestCase):
             fn_no_cl = lazy.function([img], gt)
 
             fn_yes_cl.reuse_computed = True # optimization
+            print 'fn_yes_cl:'
+            fn_yes_cl.print_eval_order()
 
             def with_cl():
                 return fn_yes_cl(imgdata)
@@ -123,9 +125,13 @@ class TestColorconv(TestCase):
             def orig_fn():
                 return convert_colorspace(imgdata, space, 'RGB')
 
-            print 'with_cl times', timeit.Timer(with_cl).repeat(3,3)
-            print 'without_cl times',timeit.Timer(without_cl).repeat(3,3)
-            print 'orig_fn times', timeit.Timer(orig_fn).repeat(3,3)
+            orig_fn_times = timeit.Timer(orig_fn).repeat(3,3)
+            without_cl_times = timeit.Timer(without_cl).repeat(3,3)
+            with_cl_times = timeit.Timer(with_cl).repeat(3,3)
+            print 'without_cl times',without_cl_times
+            print 'orig_fn times', orig_fn_times
+            print 'with_cl times', with_cl_times
+            print 'CL speedup:', np.asarray(without_cl_times) / with_cl_times
 
 if __name__ == "__main__":
     run_module_suite()
