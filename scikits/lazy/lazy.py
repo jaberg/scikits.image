@@ -222,8 +222,8 @@ class IncrementalClosure(Closure):
                     print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
         return symbol.value
 
-class SpecializedClosure(Closure):
-    """A SpecializedClosure is a Closure that is specialized for computing specific output
+class FunctionClosure(Closure):
+    """A FunctionClosure is a Closure that is specialized for computing specific output
     Symbols from specific input Symbols.
 
 
@@ -244,9 +244,32 @@ class SpecializedClosure(Closure):
      outputs - list of symbols to return from call
      
     """
+    @classmethod
+    def new(cls, inputs, outputs,
+            givens=None, updates=None,
+            transform_policy_ctor=transform.TransformPolicy.new):
+        if isinstance(outputs, Symbol):
+            outputs = [outputs]
+            return_outputs0 = True
+        else:
+            return_outputs0 = False
+
+        if givens:
+            #TODO: use the givens to modify the clone operation
+            raise NotImplementedError('givens arg is not implemented yet')
+        if updates:
+            #TODO: clone the updates
+            raise NotImplementedError('updates arg is not implemented yet')
+
+        rval = cls(transform_policy_ctor())
+        cloned_inputs = [rval.clone(i, recurse=False) for i in inputs]
+        cloned_outputs = [rval.clone(o, recurse=True) for o in outputs]
+        rval.set_io(cloned_inputs, cloned_outputs, updates, return_outputs0)
+        return rval
+
     reuse_computed = False
     def __init__(self, transform_policy):
-        super(SpecializedClosure, self).__init__()
+        super(FunctionClosure, self).__init__()
         self._iterating = False
         self._modified_since_iterating = False
         self.transform_policy = transform_policy
@@ -260,7 +283,7 @@ class SpecializedClosure(Closure):
         self.on_replace_impl_pre = set()
         self.on_replace_impl_post = set()
     def add_symbol(self, symbol):
-        rval = super(SpecializedClosure,self).add_symbol(symbol)
+        rval = super(FunctionClosure,self).add_symbol(symbol)
         if not hasattr(rval, 'clients'):
             rval.clients = set()
         return rval
@@ -272,7 +295,7 @@ class SpecializedClosure(Closure):
             raise ValueError('Cannot remove output symbol', symbol)
         if symbol.clients:
             raise ValueError('Cannot remove symbol with clients', symbol)
-        super(SpecializedClosure, self).remove_symbol(symbol)
+        super(FunctionClosure, self).remove_symbol(symbol)
         if symbol.expr and all(((o.closure is None) and (not o.clients)) for o in symbol.expr.outputs):
             # no outputs are in use, so remove symbol.expr as client
             for pos, s_input in enumerate(symbol.expr.inputs):
@@ -318,13 +341,13 @@ class SpecializedClosure(Closure):
 
     def add_expr(self, expr):
         """Add an expression to this closure"""
-        rval = super(SpecializedClosure, self).add_expr(expr)
+        rval = super(FunctionClosure, self).add_expr(expr)
         assert rval is expr
         for i, s_i in enumerate(expr.inputs):
             s_i.clients.add((expr, i))
         return rval
     def remove_expr(self, expr):
-        rval = super(SpecializedClosure, self).remove_expr(expr)
+        rval = super(FunctionClosure, self).remove_expr(expr)
         for i, s_i in enumerate(expr.inputs):
             s_i.clients.remove((expr, i))
         return rval
@@ -609,32 +632,6 @@ class Impl(object):
         Override this method to return different types of symbols with Impl.__call__.
         """
         outputs = [Symbol.new(closure) for o in range(self.n_outputs)]
-
-def default_function_closure_ctor():
-    return SpecializedClosure(transform.TransformPolicy.new())
-
-def function(inputs, outputs, 
-        closure_ctor=default_function_closure_ctor,
-        givens=None,
-        updates=None):
-    if isinstance(outputs, Symbol):
-        outputs = [outputs]
-        return_outputs0 = True
-    else:
-        return_outputs0 = False
-
-    if givens:
-        #TODO: use the givens to modify the clone operation
-        raise NotImplementedError('givens arg is not implemented yet')
-    if updates:
-        #TODO: clone the updates
-        raise NotImplementedError('updates arg is not implemented yet')
-
-    closure = closure_ctor()
-    cloned_inputs = [closure.clone(i, recurse=False) for i in inputs]
-    cloned_outputs = [closure.clone(o, recurse=True) for o in outputs]
-    closure.set_io(cloned_inputs, cloned_outputs, updates, return_outputs0)
-    return closure
 
 def io_toposort(inputs, outputs, orderings):
     """Returns sorted list of expression nodes
