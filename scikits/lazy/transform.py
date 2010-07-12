@@ -59,12 +59,12 @@ class TransformPolicy(object):
             h.transform(closure)
 
 
-@register_transform(0.000, 'default')
+@register_transform(transform_db['merge_0'].position+0.01, 'default')
 def merge_duplicate_constants(closure, **kwargs):
     #TODO:
     pass
 
-@register_transform(0.001, 'default')
+@register_transform(transform_db['merge_0'].position+0.02, 'default')
 def merge_duplicate_expressions(closure, **kwargs):
     #TODO:
     pass
