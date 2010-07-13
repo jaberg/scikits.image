@@ -248,20 +248,60 @@ class FunctionClosure(Closure):
     def new(cls, inputs, outputs,
             givens=None, updates=None,
             transform_policy_ctor=transform.TransformPolicy.new):
+        """Return a FunctionClosure cloned from `inputs` and `outputs`, optimized for computing
+        `outputs` from `inputs.
+
+        :type inputs: list of symbols
+        :param inputs: 
+            symbols standing for the parameter list of the function this closure represents.
+            This constructor recognizes boolean Symbol attributes `mutable` and `strict`.  If
+            an input symbol is `strict` then arguments will not be coerced to conform to the
+            requirements of the symbol if they do not meet the conformation requirements of the
+            symbol.  If an input symbol is `mutable` then the __call__ method of the closure
+            may overwrite the contents of an argument to improve performance.
+
+        :type givens: 
+            iterable over pairs (Var1, Var2) of Variables. List, tuple or dict.
+
+        :param givens: 
+            substitutions to make in the computation graph (Var2 replaces
+            Var1).  If `givens` is a list or tuple, then the substitutions are done in the
+            order of the list.  If `givens` is a dictionary, then the order is undefined.
+
+        """
         if isinstance(outputs, Symbol):
             outputs = [outputs]
             return_outputs0 = True
         else:
             return_outputs0 = False
 
+        rval = cls(transform_policy_ctor())
+
         if givens:
-            #TODO: use the givens to modify the clone operation
-            raise NotImplementedError('givens arg is not implemented yet')
+            # initialize the clone_d mapping with the `givens` argument
+            try:  # try to convert a dictionary to the sort of list that we need.
+                givens = givens.items() 
+            except:
+                pass
+            for s_orig, s_repl in givens:
+                if not isinstance(s_orig, Symbol):
+                    raise TypeError('given keys must be Symbol', s_orig)
+                if not isinstance(s_repl, Symbol):
+                    #TODO: some auto-symbol maker factory function or smth
+                    raise NotImplementedError('given values must be Symbols for now', 
+                            s_repl)
+                if s_orig in rval.clone_dict:
+                    #TODO: better type of exception here?
+                    raise ValueError(
+                            'Error in givens: symbol already cloned',
+                            (s_orig, rval.clone_dict[s_orig]))
+                cloned_repl = rval.clone(s_repl)
+                assert s_orig not in rval.clone_dict
+                rval.clone_dict[s_orig] = cloned_repl
         if updates:
             #TODO: clone the updates
             raise NotImplementedError('updates arg is not implemented yet')
 
-        rval = cls(transform_policy_ctor())
         cloned_inputs = [rval.clone(i, recurse=False) for i in inputs]
         cloned_outputs = [rval.clone(o, recurse=True) for o in outputs]
         rval.set_io(cloned_inputs, cloned_outputs, updates, return_outputs0)
