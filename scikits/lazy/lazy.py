@@ -307,7 +307,7 @@ class FunctionClosure(Closure):
                     raise ValueError(
                             'Error in givens: symbol already cloned',
                             (s_orig, rval.clone_dict[s_orig]))
-                cloned_repl = rval.clone(s_repl)
+                cloned_repl = rval.clone(s_repl, recurse=True)
                 assert s_orig not in rval.clone_dict
                 rval.clone_dict[s_orig] = cloned_repl
         if updates:
@@ -683,7 +683,7 @@ class Impl(object):
         This is a helper method used by Impl.__call__.
         Override this method to return different types of symbols with Impl.__call__.
         """
-        outputs = [Symbol.new(closure) for o in range(self.n_outputs)]
+        return [Symbol.new(inputs[0].closure) for o in range(self.n_outputs)]
 
 def io_toposort(inputs, outputs, orderings):
     """Returns sorted list of expression nodes
