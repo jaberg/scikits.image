@@ -195,6 +195,9 @@ class Closure(object):
             o.expr = None
         o.closure = None
 
+    def __getitem__(self, key):
+        return self.clone_dict[key]
+
 class IncrementalClosure(Closure):
     """
     A Closure that is designed for one-time incremental evaluation.
