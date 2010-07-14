@@ -52,6 +52,15 @@ class Symbol(object):
             rval.update_from_value()
         return closure.add_symbol(rval)
 
+    @classmethod
+    def new_kwargs(cls, closure=None, expr=None, value=UndefinedValue, name=None, **kwargs):
+        """ Return a new instance of this class with attributes initialized with kwargs
+        """
+        rval = cls.new(closure, expr, value, name)
+        for key, val in kwargs.items():
+            setattr(rval, key, val)
+        return rval
+
     def __init__(self, clients, closure, expr, value, name):
         self.clients = clients
         self.closure = closure
