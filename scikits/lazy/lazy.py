@@ -16,7 +16,7 @@ define specialized functions.
 
 :licence: modified BSD
 """
-import copy
+import copy, sys
 from collections import deque
 
 import transform
@@ -314,6 +314,7 @@ class FunctionClosure(Closure):
             #TODO: clone the updates
             raise NotImplementedError('updates arg is not implemented yet')
 
+        #rval.clone(i) will retrieve the cloned_repl if i was in givens
         cloned_inputs = [rval.clone(i, recurse=False) for i in inputs]
         cloned_outputs = [rval.clone(o, recurse=True) for o in outputs]
         rval.set_io(cloned_inputs, cloned_outputs, updates, return_outputs0)
