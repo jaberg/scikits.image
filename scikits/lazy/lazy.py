@@ -504,7 +504,8 @@ class FunctionClosure(Closure):
     def expr_iter_with_Impl(self, ImplClass):
         return self.nodes_iter(lambda o: isinstance(getattr(o, 'impl', None), ImplClass))
 
-    def __call__(self, *args):
+    def __call__(self, *args, **kwargs):
+        verbose = kwargs.get('verbose', False)
         if len(args) != len(self.inputs):
             raise TypeError('Wrong number of inputs')
         assert len(self.inputs) == self.n_inputs == len(self.inputs_strict)
@@ -532,6 +533,8 @@ class FunctionClosure(Closure):
                 results = expr.impl.fn(*args)
             elif expr.impl.fn_protocol == 'python_io':
                 old_rvals = [computed.get(i,UndefinedValue) for i in expr.outputs]
+                if verbose:
+                    print >> sys.stderr, "FunctionClosure::__call__ eval", expr
                 results = expr.impl.fn(args, old_rvals)
             else:
                 raise NotImplementedError('Impl.fn_protocol', expr.impl.fn_protocol)
