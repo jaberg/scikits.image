@@ -541,14 +541,18 @@ class FunctionClosure(Closure):
             if expr.n_outputs>1:
                 assert len(results) == len(expr.outputs)
                 for s,r in zip(expr.outputs, results):
-                    computed[s] = s.coerce(r) # coerce returns r (quickly) if r is conformant
-                    if not (computed[s] is r):
+                    if s.is_conformant(r):
+                        computed[s] = r
+                    else: 
                         print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
+                        computed[s] = s.coerce(r) # coerce returns r (quickly) if r is conformant
             else:
                 # one output means `symbol` must be that one output
-                computed[expr.outputs[0]] = expr.outputs[0].coerce(results)
-                if not (computed[expr.outputs[0]] is results):
+                if expr.outputs[0].is_conformant(results):
+                    computed[expr.outputs[0]] = results
+                else:
                     print >> sys.stderr, "WARNING: %s returned non-conformant value" % str(expr.impl)
+                    computed[expr.outputs[0]] = expr.outputs[0].coerce(results)
 
         if self.unpack:
             rval = computed[self.outputs[0]]
