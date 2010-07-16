@@ -287,11 +287,12 @@ class ColorConvert3x3(lnumpy.NdarrayImpl):
         changed = set()
         out, = expr.outputs
         colormap, img = expr.inputs
-        if img.shape is None:
-            img.shape = (None, None, 3)
-            changed.add(img)
-        out.contiguous=True
-        out.shape=img.shape
+        if getattr(img, 'shape', None) is None:
+            oshp = (None, None, 3)
+        else:
+            oshp = img.shape
+        out.c_contiguous=True
+        out.shape=oshp
         out.dtype=np.dtype('float32')
         changed.add(out) # TODO: how to monitor changes of Types 
         # more reliably, and with finer grain over what has been changed?
