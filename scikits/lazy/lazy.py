@@ -428,6 +428,9 @@ class FunctionClosure(Closure):
         for o in inputs+outputs:
             if o.closure is not self:
                 raise ValueError('output not in closure', o)
+        self.inputs_strict = [getattr(i, 'strict', False) for i in inputs]
+        self.n_inputs = len(inputs)   # constant do not change!
+        self.n_outputs = len(outputs) # constant do not change!
         self.inputs = inputs
         self.outputs = outputs
         self.unpack = unpack_single_output and len(outputs)==1
@@ -504,6 +507,7 @@ class FunctionClosure(Closure):
     def __call__(self, *args):
         if len(args) != len(self.inputs):
             raise TypeError('Wrong number of inputs')
+        assert len(self.inputs) == self.n_inputs == len(self.inputs_strict)
         if self.reuse_computed:
             computed = getattr(self, 'computed', {})
         else:
@@ -516,10 +520,11 @@ class FunctionClosure(Closure):
         if not computed:
             for c in self.constant_iter():
                 computed[c] = c.value
-        for i, a in zip(self.inputs, args):
-            if not i.is_conformant(a):
+        for strict, i, a in zip(self.inputs_strict, self.inputs, args):
+            if strict and not i.is_conformant(a):
                 raise TypeError(a)
-            computed[i] = a
+            #print 'CALL: loading input', i, a.dtype, a.strides
+            computed[i] = i.coerce(a)
 
         for expr in self.expr_iter():
             args = [computed[i] for i in expr.inputs]
