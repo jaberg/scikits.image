@@ -6,9 +6,11 @@ from scikits.image.color import colorconv
 
 _enabled = True
 def enable():
+    """Enable graph optimizations of the Impls in colorconv"""
     global _enabled
     _enabled=True
 def disable():
+    """Disable graph optimizations of the Impls in colorconv"""
     global _enabled
     _enabled=False
 
@@ -32,12 +34,11 @@ def replace_colorconvert_with_opencl(closure, **kwargs):
     for expr in closure.expr_iter_with_Impl(colorconv.ColorConvert3x3):
         m3x3, img = expr.inputs
         if m3x3.constant and m3x3.dtype == np.dtype('float64'):
-            print 'Converting to float32'
             m3x3 = lnumpy.NdarraySymbol.new(
                     closure=m3x3.closure,
                     value = m3x3.value.astype('float32'))
 
-        if None is not m3x3.dtype and None is not img.dtype:
+        if None is not m3x3.dtype and None is not getattr(img,'dtype',None):
             new_impl = ColorConvert3x3_OpenCL.build_for_types(m3x3.dtype, img.dtype)
             new_out = new_impl(m3x3, img)
             replacements.append((expr.outputs[0], new_out))
@@ -93,8 +94,9 @@ class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
             }
             """ % locals()).build()
         def cl_fn((m3x3, img),(old_z,)):
-            n_threads=1 
             n_pixels = img.shape[0]*img.shape[1]
+            assert img.dtype == img_dtype
+            assert m3x3.dtype == m3x3_dtype
             assert img.shape[2] == 3
             assert m3x3.shape == (3,3)
             if n_pixels > 10000:
@@ -105,6 +107,8 @@ class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
                     n_threads = 4
                 elif not n_pixels % 2:
                     n_threads = 2
+            else:
+                n_threads=1 
             img = np.ascontiguousarray(img)
             m3x3 = np.ascontiguousarray(m3x3)
             if old_z is UndefinedValue:
@@ -114,13 +118,15 @@ class ColorConvert3x3_OpenCL(colorconv.ColorConvert3x3):
                 if z.shape != img.shape:
                     z.resize(img.shape)
 
+            z = np.ascontiguousarray(z)
+            assert z.dtype == img.dtype
+
             assert z.shape == img.shape
             
             a_buf = cl.Buffer(_cpu_context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=img)
             m_buf = cl.Buffer(_cpu_context, cl.mem_flags.READ_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=m3x3)
             z_buf = cl.Buffer(_cpu_context, cl.mem_flags.WRITE_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=z)
 
-            #print 'using threads', n_threads
             rval = prg.elemwise(_cpu_queue, (n_threads,), None, 
                     np.int64(n_pixels/n_threads), m_buf, a_buf, z_buf)
             rval.wait()  #not good if there are several OpenCL commands to do in sequence
