@@ -20,11 +20,26 @@ class NdarraySymbol(Symbol):
     def __rmul__(other, self): return multiply(self, other)
     def __rdiv__(other, self): return divide(self, other)
 
+
+    def metadata_attributes(self):
+        #TODO: recurse to parent class
+        return(
+            'dtype',
+            'shape',
+            'strides',
+            'databuffer',
+            'c_contiguous',
+            'f_contiguous',
+            'symmetric',
+            'positive_semidefinite',
+            )
+
     dtype = None
     shape = None
     strides=None
     databuffer=None
-    contiguous=None
+    c_contiguous=None
+    f_contiguous=None
     symmetric=None
     positive_semidefinite=None
     def is_conformant(self, obj):
@@ -41,6 +56,10 @@ class NdarraySymbol(Symbol):
                 return False
             if any(a!=b for (a,b) in zip(self.strides, obj.strides) if a is not None):
                 return False
+        if self.c_contiguous and not obj.flags['C_CONTIGUOUS']:
+            return False
+        if self.f_contiguous and not obj.flags['F_CONTIGUOUS']:
+            return False
         if (self.databuffer != None) and obj.data != self.databuffer: return False
         return True
     def coerce(self, obj):
@@ -51,8 +70,8 @@ class NdarraySymbol(Symbol):
         if self.is_conformant(obj): return obj
         if self.constant: raise TypeError('', (obj, self.value))
         if self.databuffer is not None: raise TypeError()
-        if self.dtype:
-            nda = numpy.asarray(obj, self.dtype)
+        if self.dtype is not None:
+            nda = numpy.asarray(obj, dtype=self.dtype)
         else:
             nda = numpy.asarray(obj)
         if self.shape is not None:
@@ -73,6 +92,13 @@ class NdarraySymbol(Symbol):
                 raise TypeError('stride count mismatch', obj)
             if any(a!=b for (a,b) in zip(self.strides, nda.strides) if a is not None):
                 raise TypeError('stride mismatch', obj)
+        if self.c_contiguous and self.f_contiguous:
+            assert nda.ndim <= 1
+            nda = numpy.ascontiguousarray(nda)
+        elif self.c_contiguous:
+            nda = numpy.ascontiguousarray(nda)
+        elif self.f_contiguous:
+            nda = numpy.asfortranarray(nda)
         return nda
     def values_eq(self, v0, v1, approx=False):
         if approx:
@@ -87,8 +113,9 @@ class NdarraySymbol(Symbol):
         self.databuffer=self.value.data
 
     def __repr__(self):
-        return 'NdarraySymbol{constant=%s,dtype=%s,shape=%s,strides=%s,contiguous=%s,symmetric=%s}'%(
-            self.constant, self.dtype, self.shape, self.strides, self.contiguous, self.symmetric)
+        return '%s{constant=%s,dtype=%s,shape=%s,strides=%s,symmetric=%s}'%(
+            self.__class__.__name__,self.constant, self.dtype, self.shape, self.strides,
+            self.symmetric)
 
 class NdarrayImpl(Impl):
     def outputs_from_inputs(self, inputs):
