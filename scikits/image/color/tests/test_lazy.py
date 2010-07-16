@@ -26,6 +26,7 @@ scikits.image.color.lazyopts.disable()
 
 from scikits.image import data_dir
 from scikits import lazy
+from scikits.lazy import lnumpy_opencl
 
 import colorsys
 
@@ -92,6 +93,35 @@ class TestColorconv(TestCase):
             #eval_gt.print_eval_order()
             assert_almost_equal(convert_colorspace(self.colbars_array, 'RGB',
                                                    space), eval_gt(img.value))
+
+    def test_opencl_gpu(self):
+        import pyopencl as cl
+        try:
+            gpu_context = cl.Context(dev_type=cl.device_type.GPU)
+            gpu_queue = cl.CommandQueue(gpu_context)
+        except cl.LogicError, e:
+            print >> sys.stderr, "NO GPU, skipping test_opencl_gpu"
+        scikits.image.color.lazyopts.enable()
+        colspaces = ['RGB CIE', 'XYZ']
+        colfuncs_from = [rgbcie2rgb, xyz2rgb]
+        colfuncs_to = [rgb2rgbcie, rgb2xyz]
+
+        # create an input, and make some promises about it.
+        img = lazy.Symbol.new()
+        print 'COLBARS_ARRAY', self.colbars_array
+        for i, space in enumerate(colspaces):
+            print 'test: colorspace', space
+            gt = colfuncs_from[i](img)
+            cl_img = lazy.lnumpy_opencl.Symbol.new_kwargs(
+                    context=gpu_context,
+                    shape=(None,None,3),
+                    dtype=np.dtype('float32'),
+                    strict=False)
+            eval_gt = lazy.function([img], gt, givens={img:cl_img})
+            assert type(eval_gt.inputs[0]) == lazy.lnumpy_opencl.Symbol
+            assert len(list(eval_gt.expr_iter()))==2
+            assert_almost_equal(convert_colorspace(self.colbars_array, space,
+                                                  'RGB'), eval_gt(self.colbars_array))
 
     def test_opencl_speed(self):
         scikits.image.color.lazyopts.enable()
