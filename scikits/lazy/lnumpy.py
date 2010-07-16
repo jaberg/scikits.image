@@ -42,9 +42,10 @@ class NdarraySymbol(Symbol):
     f_contiguous=None
     symmetric=None
     positive_semidefinite=None
-    def is_conformant(self, obj):
+
+    def is_conformant(self, obj, type_required=numpy.ndarray):
         if self.constant: return (self.value is obj)
-        if type(obj) != numpy.ndarray: return False
+        if not isinstance(obj, type_required): return False
         if (self.dtype != None) and obj.dtype != self.dtype: return False
         if self.shape is not None:
             if len(self.shape) != obj.ndim:
