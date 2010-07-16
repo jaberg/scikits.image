@@ -1,0 +1,35 @@
+
+Design Issues
+=============
+
+
+Metadata and Symbols
+--------------------
+
+The current implementation uses Symbol [subclass] instance attributes to store metadata.
+For example, lnumpy.Ndarray has 'c_contiguous', 'symmetric', 'dtype', and 'strides' metadata
+fields which may be completely unknown, known, or partially known.
+
+Impl.infer_type()  functions are responsible for updating the meta-data of the inputs and
+outputs of an expression, and detecting some kinds of errors (e.g. this will never work, shapes
+are guaranteed to be incompatible).  This method is supposed to return a list or set of symbols
+that this function changed.
+
+There are some advantages to this approach:
+0) It is simple to implement and understand.
+1) An Implementation can add arbitrary attributes to output symbols to communicate properties
+   that were not forseen by the Symbol creators.  It is inelegant to use Subclasses to add
+   properties because it would then be difficult to add multiple properties.
+
+There are problems with this approach:
+1) It is easy for someone to mis-type the name of a metadata attribute (e.g.  
+   "output[0].c_contiguus = True"), and this assignment will cause no trouble
+2) It is awkward to implement infer_type() because these implementations are full of 'if
+
+   output[0].shape != shape, then assign it and add output[0] to the changed set.'
+
+3) The returning of a changed-symbol set from infer_types makes it awkward for the transform
+   engine to know *what* was changed, and that might make things ineffecient later on.  Changes
+   to symbols are interesting events, and graph monitoring code might need to do something if
+   the dtype changes, but not care if the strides change for example.
+
