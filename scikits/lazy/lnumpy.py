@@ -128,6 +128,12 @@ class NdarrayImpl(Impl):
         """Convenience method - it's the default constructor for lazy Impl __call__ methods to
         use to easily turn all inputs into symbols.
         """
+        #any object can tell how NdarrayImpl to interpret itself as an input
+        # by defining the __NdarrayImpl_as_input__ method
+        special_as_input = getattr(obj, '__NdarrayImpl_as_input__', lambda : None)()
+        if special_as_input:
+            return special_as_input
+        # If that method isn't defined, then fallback to normal procedure
         return super(NdarrayImpl, self).as_input(closure, obj, symbol_ctor)
 
 class Elemwise(NdarrayImpl):

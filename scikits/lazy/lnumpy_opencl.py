@@ -33,7 +33,7 @@ def transfer_to_host(device_array):
 
 class Symbol(lnumpy_Symbol):
     context = None
-    def __Ndarray_as_input__(self):
+    def __NdarrayImpl_as_input__(self):
         return transfer_to_host(self)
 
     # The current implementation using pyopencl.array requires these
